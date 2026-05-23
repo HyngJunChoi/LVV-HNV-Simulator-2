@@ -66,7 +66,7 @@ It is a structural consequence of the AGI's own coherence-maximizing logic.
 
 ```bash
 pip install numpy matplotlib
-python LVV-HNV_Simulator.py
+python simulator.py
 ```
 
 Two scenarios are simulated:
