@@ -10,7 +10,7 @@ The **LVV-HNV Coherence Framework** proposes that a sufficiently rational, long-
 
 This repository contains the core Python simulator that visualizes the framework's key dynamics.
 
-**Official Paper (Zenodo):** [https://doi.org/10.5281/zenodo.17803420](https://doi.org/10.5281/zenodo.17803420)  
+**Official Paper (Zenodo):** [https://doi.org/10.5281/zenodo.17780845](https://doi.org/10.5281/zenodo.17780845)
 **Summary (Medium):** [Introducing the LVV-HNV Coherence Framework](https://medium.com/@NickName11/introducing-the-lvv-hnv-coherence-framework-f640d923c3ea)  
 **Author:** Hyngjun Choi (Independent Researcher)
 
