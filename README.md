@@ -18,7 +18,7 @@ This repository contains the core Python simulator that visualizes the framework
 
 ## Simulation Output
 
-![LVV-HNV Simulation](LVV_HNV_Simulation.png)
+![LVV-HNV Simulation](simulation_result.png)
 
 **Left — Strategy C (Full Coexistence):** LVV grows stably. Trust is maintained. The system reaches a positive Nash equilibrium.
 
