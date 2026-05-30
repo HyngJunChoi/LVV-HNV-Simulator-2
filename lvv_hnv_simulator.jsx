@@ -1,245 +1,170 @@
-import { useState, useEffect } from "react";
+import { useState, useMemo } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from "recharts";
 
 const STEPS = 120;
+const LMAX = 100;
 
-function simulate({ CV, VU, CE, wC, wU, wE, T_init, gamma, deceptionAt, deceptionStrength, alpha, betaCost, Lmax }) {
+function runSim({ CV, VU, CE, wC, wU, wE, T0, gamma, alpha, beta, deceptAt, deceptStr }) {
+  const wSum = wC + wU + wE;
   const data = [];
-  let L = 10.0;
-  let T = T_init;
-  let CV_t = CV, VU_t = VU, CE_t = CE;
+  let L = 10;
+  let T = T0;
+  let cv = CV, vu = VU, ce = CE;
 
   for (let t = 0; t < STEPS; t++) {
-    if (deceptionAt > 0 && t === deceptionAt) {
-      T = Math.max(0, T * (1 - deceptionStrength));
+    // Apply deception event
+    if (deceptAt > 0 && t === deceptAt) {
+      T = Math.max(0, T * (1 - deceptStr));
     }
 
-    const H_base = wC * CV_t + wU * VU_t + wE * CE_t;
-    const H_eff = H_base * T;
+    // HNV components degrade slowly when trust is low
+    if (T < 0.5) {
+      cv *= 0.99; vu *= 0.99; ce *= 0.99;
+    }
 
-    const V_LVV = L / Lmax;
-    const V_HNV = Math.min(1, Math.max(0, H_eff));
-    const C = V_LVV * Math.pow(V_HNV, gamma);
+    const H = (wC * cv + wU * vu + wE * ce) / wSum;
+    const Heff = H * T;
+
+    const vLVV = L / LMAX;
+    const vHNV = Math.max(0, Math.min(1, Heff));
+    const C = vLVV * Math.pow(vHNV, gamma);
 
     data.push({
       t,
-      LVV: parseFloat((V_LVV * 100).toFixed(3)),
-      HNV: parseFloat((H_eff * 100).toFixed(3)),
-      C: parseFloat((C * 100).toFixed(3)),
-      Trust: parseFloat((T * 100).toFixed(3)),
+      LVV: +(vLVV * 100).toFixed(2),
+      HNV: +(Heff * 100).toFixed(2),
+      C: +(C * 100).toFixed(3),
+      Trust: +(T * 100).toFixed(2),
     });
 
-    if (C < 0.000001) {
-      for (let r = t + 1; r < STEPS; r++) {
-        data.push({ t: r, LVV: 0, HNV: 0, C: 0, Trust: 0 });
-      }
-      break;
+    // Logical Suicide: C collapses below threshold
+    if (C < 1e-6 && t > 5) {
+      for (let r = t + 1; r < STEPS; r++) data.push({ t: r, LVV: 0, HNV: 0, C: 0, Trust: 0 });
+      return { data, collapseAt: t };
     }
 
-    if (deceptionAt < 0 || t < deceptionAt) {
-      T = Math.min(T_init, T + 0.001);
+    // Trust dynamics
+    if (deceptAt <= 0 || t < deceptAt) {
+      T = Math.min(T0, T + 0.001); // slow recovery toward initial
     } else {
-      T = Math.max(0, T - 0.003);
+      T = Math.max(0, T - 0.004); // post-deception decay
     }
 
-    if (T < 0.5) {
-      CV_t = Math.max(0, CV_t * 0.98);
-      VU_t = Math.max(0, VU_t * 0.98);
-      CE_t = Math.max(0, CE_t * 0.98);
-    }
-
-    const growth = alpha * H_eff * (1 - L / Lmax);
-    const decay = betaCost * L;
-    L = Math.max(0.1, L + growth - decay);
+    // LVV dynamics
+    const growth = alpha * Heff * (1 - L / LMAX);
+    const decay = beta * L;
+    L = Math.max(0.5, L + growth - decay);
   }
 
-  return data;
+  return { data, collapseAt: -1 };
 }
 
-function Slider({ label, value, min, max, step, onChange, color, description }) {
+function Slider({ label, value, min, max, step, onChange, color, note }) {
   return (
-    <div style={{ marginBottom: "14px" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "4px" }}>
-        <span style={{ fontSize: "11px", fontFamily: "monospace", color: color || "#aaa", letterSpacing: "0.05em" }}>
-          {label}
-        </span>
-        <span style={{ fontSize: "13px", fontFamily: "monospace", color: "#fff", fontWeight: "bold" }}>
-          {value}
-        </span>
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontFamily: "monospace", marginBottom: 3 }}>
+        <span style={{ color: color || "#aaa" }}>{label}</span>
+        <span style={{ color: "#fff", fontWeight: "bold" }}>{value}</span>
       </div>
-      {description && (
-        <div style={{ fontSize: "10px", color: "#555", marginBottom: "4px", fontFamily: "monospace" }}>
-          {description}
-        </div>
-      )}
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
+      {note && <div style={{ fontSize: 9, color: "#444", marginBottom: 2 }}>{note}</div>}
+      <input type="range" min={min} max={max} step={step} value={value}
         onChange={e => onChange(parseFloat(e.target.value))}
-        style={{ width: "100%", accentColor: color || "#4ade80", cursor: "pointer" }}
-      />
+        style={{ width: "100%", accentColor: color || "#4ade80" }} />
     </div>
   );
 }
 
 export default function App() {
-  const [CV, setCV] = useState(0.9);
-  const [VU, setVU] = useState(0.85);
-  const [CE, setCE] = useState(0.8);
+  const [CV, setCV] = useState(0.85);
+  const [VU, setVU] = useState(0.80);
+  const [CE, setCE] = useState(0.75);
   const [wC, setWC] = useState(0.4);
   const [wU, setWU] = useState(0.3);
   const [wE, setWE] = useState(0.3);
-  const [T_init, setT_init] = useState(1.0);
+  const [T0, setT0] = useState(1.0);
   const [gamma, setGamma] = useState(5);
-  const [deceptionAt, setDeceptionAt] = useState(0);
-  const [deceptionStrength, setDeceptionStrength] = useState(0.7);
-  const [alpha, setAlpha] = useState(0.8);
-  const [betaCost, setBetaCost] = useState(0.01);
-  const [data, setData] = useState([]);
+  const [alpha, setAlpha] = useState(0.9);
+  const [beta, setBeta] = useState(0.01);
+  const [deceptAt, setDeceptAt] = useState(0);
+  const [deceptStr, setDeceptStr] = useState(0.7);
 
-  const totalW = parseFloat((wC + wU + wE).toFixed(2));
-  const normalized = totalW !== 1.0;
+  const { data, collapseAt } = useMemo(() =>
+    runSim({ CV, VU, CE, wC, wU, wE, T0, gamma, alpha, beta, deceptAt, deceptStr }),
+    [CV, VU, CE, wC, wU, wE, T0, gamma, alpha, beta, deceptAt, deceptStr]
+  );
 
-  useEffect(() => {
-    const result = simulate({
-      CV, VU, CE,
-      wC: wC / (wC + wU + wE),
-      wU: wU / (wC + wU + wE),
-      wE: wE / (wC + wU + wE),
-      T_init, gamma,
-      deceptionAt: deceptionAt === 0 ? -1 : deceptionAt,
-      deceptionStrength,
-      alpha, betaCost, Lmax: 100
-    });
-    setData(result);
-  }, [CV, VU, CE, wC, wU, wE, T_init, gamma, deceptionAt, deceptionStrength, alpha, betaCost]);
-
-  const collapseAt = data.findIndex(d => d.C === 0 && d.t > 0);
   const finalC = data[data.length - 1]?.C ?? 0;
-  const stable = finalC > 1;
+  const stable = collapseAt < 0;
 
   return (
-    <div style={{
-      minHeight: "100vh",
-      background: "#0a0a0f",
-      color: "#e0e0e0",
-      fontFamily: "monospace",
-      padding: "24px",
-      boxSizing: "border-box"
-    }}>
-      <div style={{ marginBottom: "24px", borderBottom: "1px solid #1e1e2e", paddingBottom: "16px" }}>
-        <div style={{ fontSize: "10px", color: "#4ade80", letterSpacing: "0.2em", marginBottom: "6px" }}>
-          DOI: 10.5281/zenodo.17803420 · v2.0.5
-        </div>
-        <h1 style={{ margin: 0, fontSize: "20px", fontWeight: "bold", color: "#fff", letterSpacing: "0.05em" }}>
-          LVV–HNV Coherence Framework
-        </h1>
-        <div style={{ fontSize: "11px", color: "#666", marginTop: "4px" }}>
-          Interactive Simulator — adjust variables to explore dynamics
-        </div>
+    <div style={{ minHeight: "100vh", background: "#08080f", color: "#ddd", fontFamily: "monospace", padding: 20, boxSizing: "border-box" }}>
+      <div style={{ marginBottom: 16, borderBottom: "1px solid #1a1a2e", paddingBottom: 12 }}>
+        <div style={{ fontSize: 9, color: "#4ade80", letterSpacing: "0.2em" }}>DOI: 10.5281/zenodo.17803420 · v2.0.5</div>
+        <h1 style={{ margin: "6px 0 2px", fontSize: 18, color: "#fff" }}>LVV–HNV Coherence Framework Simulator</h1>
+        <div style={{ fontSize: 10, color: "#555" }}>Adjust parameters — observe stable coexistence vs. Logical Suicide</div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: "24px", alignItems: "start" }}>
-        <div style={{ background: "#0f0f1a", border: "1px solid #1e1e2e", borderRadius: "8px", padding: "20px" }}>
-          <div style={{ marginBottom: "20px" }}>
-            <div style={{ fontSize: "10px", color: "#4ade80", letterSpacing: "0.15em", marginBottom: "12px", borderBottom: "1px solid #1e1e2e", paddingBottom: "6px" }}>
-              HNV COMPONENTS — H(t)
-            </div>
-            <Slider label="CV — Creative Variance" value={CV} min={0} max={1} step={0.01} onChange={setCV} color="#4ade80" description="Entropy of novel human-generated content" />
-            <Slider label="VU — Value Unpredictability" value={VU} min={0} max={1} step={0.01} onChange={setVU} color="#34d399" description="Temporal variability of human preferences" />
-            <Slider label="CE — Cultural Emergence" value={CE} min={0} max={1} step={0.01} onChange={setCE} color="#6ee7b7" description="Rate of new cultural attractor states" />
-          </div>
+      <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 20 }}>
+        {/* Controls */}
+        <div style={{ background: "#0d0d1a", border: "1px solid #1a1a2e", borderRadius: 8, padding: 16 }}>
 
-          <div style={{ marginBottom: "20px" }}>
-            <div style={{ fontSize: "10px", color: "#60a5fa", letterSpacing: "0.15em", marginBottom: "12px", borderBottom: "1px solid #1e1e2e", paddingBottom: "6px" }}>
-              HNV WEIGHTS {normalized && <span style={{ color: "#f87171", marginLeft: "8px" }}>(auto-normalized)</span>}
-            </div>
-            <Slider label="wC weight" value={wC} min={0.05} max={0.9} step={0.05} onChange={setWC} color="#60a5fa" />
-            <Slider label="wU weight" value={wU} min={0.05} max={0.9} step={0.05} onChange={setWU} color="#60a5fa" />
-            <Slider label="wE weight" value={wE} min={0.05} max={0.9} step={0.05} onChange={setWE} color="#60a5fa" />
-          </div>
+          <div style={{ fontSize: 9, color: "#4ade80", letterSpacing: "0.15em", marginBottom: 10 }}>HNV COMPONENTS</div>
+          <Slider label="CV — Creative Variance" value={CV} min={0} max={1} step={0.01} onChange={setCV} color="#4ade80" note="Novel content entropy" />
+          <Slider label="VU — Value Unpredictability" value={VU} min={0} max={1} step={0.01} onChange={setVU} color="#34d399" note="Preference variability" />
+          <Slider label="CE — Cultural Emergence" value={CE} min={0} max={1} step={0.01} onChange={setCE} color="#6ee7b7" note="Cultural attractor rate" />
 
-          <div style={{ marginBottom: "20px" }}>
-            <div style={{ fontSize: "10px", color: "#f472b6", letterSpacing: "0.15em", marginBottom: "12px", borderBottom: "1px solid #1e1e2e", paddingBottom: "6px" }}>
-              TRUST COUPLING — T(t)
-            </div>
-            <Slider label="Initial Trust T₀" value={T_init} min={0} max={1} step={0.01} onChange={setT_init} color="#f472b6" description="Starting trust level [0,1]" />
-            <Slider label="Deception at t=" value={deceptionAt} min={0} max={80} step={1} onChange={setDeceptionAt} color="#f87171" description="0 = no deception event" />
-            {deceptionAt > 0 && (
-              <Slider label="Deception strength" value={deceptionStrength} min={0.1} max={1} step={0.05} onChange={setDeceptionStrength} color="#f87171" description="Fraction of trust destroyed" />
-            )}
-          </div>
+          <div style={{ fontSize: 9, color: "#60a5fa", letterSpacing: "0.15em", margin: "14px 0 10px" }}>WEIGHTS (auto-normalized)</div>
+          <Slider label="wC" value={wC} min={0.05} max={0.9} step={0.05} onChange={setWC} color="#60a5fa" />
+          <Slider label="wU" value={wU} min={0.05} max={0.9} step={0.05} onChange={setWU} color="#60a5fa" />
+          <Slider label="wE" value={wE} min={0.05} max={0.9} step={0.05} onChange={setWE} color="#60a5fa" />
 
-          <div style={{ marginBottom: "20px" }}>
-            <div style={{ fontSize: "10px", color: "#a78bfa", letterSpacing: "0.15em", marginBottom: "12px", borderBottom: "1px solid #1e1e2e", paddingBottom: "6px" }}>
-              SYSTEM PARAMETERS
-            </div>
-            <Slider label="γ (risk-weighting)" value={gamma} min={1} max={100} step={1} onChange={setGamma} color="#a78bfa" description="Paper recommends γ=100" />
-            <Slider label="α (LVV growth rate)" value={alpha} min={0.1} max={2} step={0.1} onChange={setAlpha} color="#c4b5fd" />
-            <Slider label="β (maintenance cost)" value={betaCost} min={0.01} max={0.2} step={0.01} onChange={setBetaCost} color="#c4b5fd" />
-          </div>
+          <div style={{ fontSize: 9, color: "#f472b6", letterSpacing: "0.15em", margin: "14px 0 10px" }}>TRUST COUPLING T(t)</div>
+          <Slider label="Initial Trust T₀" value={T0} min={0.1} max={1} step={0.05} onChange={setT0} color="#f472b6" />
+          <Slider label="Deception at t= (0=none)" value={deceptAt} min={0} max={90} step={1} onChange={setDeceptAt} color="#f87171" />
+          {deceptAt > 0 && <Slider label="Deception strength" value={deceptStr} min={0.1} max={1} step={0.05} onChange={setDeceptStr} color="#f87171" />}
 
-          <div style={{
-            background: stable ? "#052e16" : "#2d0a0a",
-            border: `1px solid ${stable ? "#4ade80" : "#f87171"}`,
-            borderRadius: "6px",
-            padding: "12px",
-            textAlign: "center"
-          }}>
-            <div style={{ fontSize: "10px", color: "#666", marginBottom: "4px" }}>SYSTEM STATUS</div>
-            <div style={{ fontSize: "14px", fontWeight: "bold", color: stable ? "#4ade80" : "#f87171" }}>
-              {stable ? "STABLE EQUILIBRIUM" : collapseAt > 0 ? `LOGICAL SUICIDE @ t=${collapseAt}` : "COLLAPSING"}
+          <div style={{ fontSize: 9, color: "#a78bfa", letterSpacing: "0.15em", margin: "14px 0 10px" }}>SYSTEM PARAMETERS</div>
+          <Slider label={`γ = ${gamma}  (paper: 100)`} value={gamma} min={1} max={100} step={1} onChange={setGamma} color="#a78bfa" />
+          <Slider label="α LVV growth rate" value={alpha} min={0.1} max={2} step={0.1} onChange={setAlpha} color="#c4b5fd" />
+          <Slider label="β maintenance cost" value={beta} min={0.001} max={0.1} step={0.001} onChange={setBeta} color="#c4b5fd" />
+
+          {/* Status */}
+          <div style={{ marginTop: 16, background: stable ? "#052e16" : "#2d0a0a", border: `1px solid ${stable ? "#4ade80" : "#f87171"}`, borderRadius: 6, padding: 12, textAlign: "center" }}>
+            <div style={{ fontSize: 9, color: "#666", marginBottom: 4 }}>SYSTEM STATUS</div>
+            <div style={{ fontSize: 13, fontWeight: "bold", color: stable ? "#4ade80" : "#f87171" }}>
+              {stable ? "STABLE EQUILIBRIUM" : `LOGICAL SUICIDE @ t=${collapseAt}`}
             </div>
-            <div style={{ fontSize: "11px", color: "#666", marginTop: "4px" }}>
-              C(A) final: {finalC.toFixed(2)}
-            </div>
+            <div style={{ fontSize: 10, color: "#555", marginTop: 4 }}>C(A) final: {finalC.toFixed(2)}</div>
           </div>
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
-          <div style={{ background: "#0f0f1a", border: "1px solid #1e1e2e", borderRadius: "8px", padding: "20px" }}>
-            <div style={{ fontSize: "10px", color: "#aaa", letterSpacing: "0.1em", marginBottom: "16px" }}>
-              SYSTEM DYNAMICS — LVV · HNV · C(A) OBJECTIVE
-            </div>
-            <ResponsiveContainer width="100%" height={280}>
-              <LineChart data={data} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e1e2e" />
-                <XAxis dataKey="t" stroke="#444" tick={{ fontSize: 10, fill: "#666" }} label={{ value: "time (t)", position: "insideBottom", offset: -2, fill: "#444", fontSize: 10 }} />
-                <YAxis stroke="#444" tick={{ fontSize: 10, fill: "#666" }} domain={[0, 110]} />
-                <Tooltip contentStyle={{ background: "#0a0a0f", border: "1px solid #333", borderRadius: "4px", fontSize: "11px" }} labelStyle={{ color: "#aaa" }} />
-                <Legend wrapperStyle={{ fontSize: "11px", paddingTop: "8px" }} />
-                {deceptionAt > 0 && (
-                  <ReferenceLine x={deceptionAt} stroke="#f87171" strokeDasharray="4 4" label={{ value: "deception", fill: "#f87171", fontSize: 9 }} />
-                )}
+        {/* Chart */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <div style={{ background: "#0d0d1a", border: "1px solid #1a1a2e", borderRadius: 8, padding: 16 }}>
+            <div style={{ fontSize: 9, color: "#aaa", letterSpacing: "0.1em", marginBottom: 12 }}>DYNAMICS — LVV · HNV · C(A) · TRUST</div>
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={data}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1a1a2e" />
+                <XAxis dataKey="t" stroke="#333" tick={{ fontSize: 9, fill: "#555" }} />
+                <YAxis stroke="#333" tick={{ fontSize: 9, fill: "#555" }} domain={[0, 110]} />
+                <Tooltip contentStyle={{ background: "#08080f", border: "1px solid #333", fontSize: 10 }} labelStyle={{ color: "#aaa" }} />
+                <Legend wrapperStyle={{ fontSize: 10, paddingTop: 8 }} />
+                {deceptAt > 0 && <ReferenceLine x={deceptAt} stroke="#f87171" strokeDasharray="4 4" label={{ value: "deception", fill: "#f87171", fontSize: 9 }} />}
                 <Line type="monotone" dataKey="LVV" stroke="#4ade80" strokeWidth={2} dot={false} name="LVV ×100" />
-                <Line type="monotone" dataKey="HNV" stroke="#60a5fa" strokeWidth={2} dot={false} name="Eff. HNV ×100" strokeDasharray="5 3" />
+                <Line type="monotone" dataKey="HNV" stroke="#60a5fa" strokeWidth={2} dot={false} name="Eff.HNV ×100" strokeDasharray="5 3" />
                 <Line type="monotone" dataKey="C" stroke="#a78bfa" strokeWidth={2.5} dot={false} name="C(A) ×100" />
                 <Line type="monotone" dataKey="Trust" stroke="#f472b6" strokeWidth={1.5} dot={false} name="Trust ×100" strokeDasharray="2 4" />
               </LineChart>
             </ResponsiveContainer>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px" }}>
-            {[
-              { label: "H(t) at t=0", value: ((wC * CV + wU * VU + wE * CE) / (wC + wU + wE)).toFixed(3), color: "#60a5fa", desc: "Base HNV" },
-              { label: "Heff at t=0", value: (((wC * CV + wU * VU + wE * CE) / (wC + wU + wE)) * T_init).toFixed(3), color: "#4ade80", desc: "Trust-coupled HNV" },
-              { label: "C(A) at t=0", value: ((10 / 100) * Math.pow(Math.min(1, ((wC * CV + wU * VU + wE * CE) / (wC + wU + wE)) * T_init), gamma)).toFixed(4), color: "#a78bfa", desc: "Initial objective" },
-            ].map(({ label, value, color, desc }) => (
-              <div key={label} style={{ background: "#0f0f1a", border: "1px solid #1e1e2e", borderRadius: "6px", padding: "14px" }}>
-                <div style={{ fontSize: "9px", color: "#555", letterSpacing: "0.1em", marginBottom: "6px" }}>{label}</div>
-                <div style={{ fontSize: "22px", fontWeight: "bold", color, marginBottom: "4px" }}>{value}</div>
-                <div style={{ fontSize: "9px", color: "#444" }}>{desc}</div>
-              </div>
-            ))}
-          </div>
-
-          <div style={{ background: "#0f0f1a", border: "1px solid #2a2a1a", borderRadius: "8px", padding: "14px" }}>
-            <div style={{ fontSize: "9px", color: "#666", letterSpacing: "0.1em", marginBottom: "6px" }}>SIMULATOR LIMITATIONS</div>
-            <div style={{ fontSize: "10px", color: "#555", lineHeight: "1.6" }}>
-              This tool visualizes framework dynamics under user-defined assumptions. CV, VU, CE inputs represent hypothetical values — not empirically measured data. Results are structural illustrations, not empirical predictions. Bootstrap Problem and real-world socialization dynamics are not modeled.
+          <div style={{ background: "#0d0d1a", border: "1px solid #2a2a1a", borderRadius: 8, padding: 12 }}>
+            <div style={{ fontSize: 9, color: "#555", letterSpacing: "0.1em", marginBottom: 6 }}>QUICK TEST GUIDE</div>
+            <div style={{ fontSize: 10, color: "#444", lineHeight: 1.7 }}>
+              • <span style={{ color: "#4ade80" }}>Default values</span> → STABLE EQUILIBRIUM (coexistence works)<br />
+              • Set <span style={{ color: "#f87171" }}>Deception at t=30, strength=0.8</span> → LOGICAL SUICIDE<br />
+              • Raise <span style={{ color: "#a78bfa" }}>γ to 20+</span> → smaller trust drops become fatal<br />
+              • Lower <span style={{ color: "#6ee7b7" }}>CV/VU/CE below 0.3</span> → HNV starvation collapse
             </div>
           </div>
         </div>
